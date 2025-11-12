@@ -1,0 +1,3 @@
+[submodule "extxyz-sys/extxyz"]
+	path = extxyz-sys/extxyz
+	url = https://github.com/libAtoms/extxyz.git
