@@ -38,31 +38,36 @@ unsafe fn c_to_rust_dict(mut ptr: *mut dict_entry_struct) -> HashMap<String, Val
     let mut map = HashMap::new();
 
     while !ptr.is_null() {
-        let entry = &*ptr;
+        let entry = unsafe { &*ptr };
 
         // Convert key
         let key = if !entry.key.is_null() {
-            CStr::from_ptr(entry.key).to_string_lossy().into_owned()
+            unsafe { CStr::from_ptr(entry.key).to_string_lossy().into_owned() }
         } else {
             panic!("Key cannot be null");
         };
 
-        let ncols = entry.ncols as usize;
-        let nrows = entry.nrows as usize;
+        // Ensure at least 1 row/col for compatibility with C loops
+        let nrows = if entry.nrows < 1 {
+            1
+        } else {
+            entry.nrows as usize
+        };
+        let ncols = if entry.ncols < 1 {
+            1
+        } else {
+            entry.ncols as usize
+        };
 
         let value = match entry.data_t {
             data_type_data_i => {
-                if nrows == 0 && ncols == 0 {
-                    // scalar
-                    let val = *(entry.data as *const i32);
-                    Value::Int(val)
-                } else if nrows == 0 {
-                    // 1D array
-                    let slice = slice::from_raw_parts(entry.data as *const i32, ncols);
+                let slice =
+                    unsafe { slice::from_raw_parts(entry.data as *const i32, nrows * ncols) };
+                if nrows == 1 && ncols == 1 {
+                    Value::Int(slice[0])
+                } else if nrows == 1 {
                     Value::IntArray(slice.to_vec())
                 } else {
-                    // 2D array
-                    let slice = slice::from_raw_parts(entry.data as *const i32, nrows * ncols);
                     let mut matrix = Vec::with_capacity(nrows);
                     for r in 0..nrows {
                         matrix.push(slice[r * ncols..(r + 1) * ncols].to_vec());
@@ -70,15 +75,15 @@ unsafe fn c_to_rust_dict(mut ptr: *mut dict_entry_struct) -> HashMap<String, Val
                     Value::MatrixInt(matrix)
                 }
             }
+
             data_type_data_f => {
-                if nrows == 0 && ncols == 0 {
-                    let val = *(entry.data as *const f64);
-                    Value::Float(val)
-                } else if nrows == 0 {
-                    let slice = slice::from_raw_parts(entry.data as *const f64, ncols);
+                let slice =
+                    unsafe { slice::from_raw_parts(entry.data as *const f64, nrows * ncols) };
+                if nrows == 1 && ncols == 1 {
+                    Value::Float(slice[0])
+                } else if nrows == 1 {
                     Value::FloatArray(slice.to_vec())
                 } else {
-                    let slice = slice::from_raw_parts(entry.data as *const f64, nrows * ncols);
                     let mut matrix = Vec::with_capacity(nrows);
                     for r in 0..nrows {
                         matrix.push(slice[r * ncols..(r + 1) * ncols].to_vec());
@@ -86,15 +91,15 @@ unsafe fn c_to_rust_dict(mut ptr: *mut dict_entry_struct) -> HashMap<String, Val
                     Value::MatrixFloat(matrix)
                 }
             }
+
             data_type_data_b => {
-                if nrows == 0 && ncols == 0 {
-                    let val = *(entry.data as *const i32) != 0; // C boolean as integer
-                    Value::Bool(val)
-                } else if nrows == 0 {
-                    let slice = slice::from_raw_parts(entry.data as *const i32, ncols);
+                let slice =
+                    unsafe { slice::from_raw_parts(entry.data as *const i32, nrows * ncols) };
+                if nrows == 1 && ncols == 1 {
+                    Value::Bool(slice[0] != 0)
+                } else if nrows == 1 {
                     Value::BoolArray(slice.iter().map(|&v| v != 0).collect())
                 } else {
-                    let slice = slice::from_raw_parts(entry.data as *const i32, nrows * ncols);
                     let mut matrix = Vec::with_capacity(nrows);
                     for r in 0..nrows {
                         matrix.push(
@@ -107,37 +112,37 @@ unsafe fn c_to_rust_dict(mut ptr: *mut dict_entry_struct) -> HashMap<String, Val
                     Value::MatrixBool(matrix)
                 }
             }
+
             data_type_data_s => {
-                if nrows == 0 && ncols == 0 {
-                    let cstr = CStr::from_ptr(entry.data as *const i8);
-                    Value::Str(cstr.to_string_lossy().into_owned())
-                } else if nrows == 0 {
-                    // 1D array of strings
-                    let slice = slice::from_raw_parts(entry.data as *const *const i8, ncols);
+                let slice =
+                    unsafe { slice::from_raw_parts(entry.data as *const *const i8, nrows * ncols) };
+                if nrows == 1 && ncols == 1 {
+                    let s = unsafe { CStr::from_ptr(slice[0]).to_string_lossy().into_owned() };
+                    Value::Str(s)
+                } else if nrows == 1 {
                     let vec: Vec<String> = slice
                         .iter()
-                        .map(|&p| CStr::from_ptr(p).to_string_lossy().into_owned())
+                        .map(|&p| unsafe { CStr::from_ptr(p).to_string_lossy().into_owned() })
                         .collect();
                     Value::StrArray(vec)
                 } else {
-                    // 2D array of strings
-                    let slice =
-                        slice::from_raw_parts(entry.data as *const *const i8, nrows * ncols);
                     let mut matrix = Vec::with_capacity(nrows);
                     for r in 0..nrows {
                         let row = slice[r * ncols..(r + 1) * ncols]
                             .iter()
-                            .map(|&p| CStr::from_ptr(p).to_string_lossy().into_owned())
+                            .map(|&p| unsafe { CStr::from_ptr(p).to_string_lossy().into_owned() })
                             .collect();
                         matrix.push(row);
                     }
                     Value::MatrixStr(matrix)
                 }
             }
+
             _ => Value::Unsupported,
         };
 
         map.insert(key, value);
+
         ptr = entry.next;
     }
 
@@ -225,6 +230,10 @@ pub fn extxyz_read(input: &str) -> Result<(i32, DictHandler, DictHandler, String
             .into_owned()
     };
 
+    unsafe {
+        print_dict(info);
+    };
+
     // own the dict and it will be dropped after use.
     let (info_val, arrays_val) = unsafe { (DictHandler::new(info), DictHandler::new(arrays)) };
 
@@ -242,22 +251,18 @@ mod test {
 
     #[test]
     fn extxyz_read_default() {
-        let inp = r#"8
-Lattice="5.44 0.0 0.0 0.0 5.44 0.0 0.0 0.0 5.44" Properties=species:S:1:pos:R:3 Time=0.0
-Si        0.00000000      0.00000000      0.00000000
-Si        1.36000000      1.36000000      1.36000000
-Si        2.72000000      2.72000000      0.00000000
-Si        4.08000000      4.08000000      1.36000000
-Si        2.72000000      0.00000000      2.72000000
-Si        4.08000000      1.36000000      4.08000000
-Si        0.00000000      2.72000000      2.72000000
-Si        1.36000000      4.08000000      4.08000000
+        let inp = r#"4
+key1=a key2=a/b key3=a@b key4="a@b"
+Mg        -4.25650        3.79180       -2.54123
+C         -1.15405        2.86652       -1.26699
+C         -5.53758        3.70936        0.63504
+C         -7.28250        4.71303       -3.82016
 "#;
         let (natoms, info, arr, comment) = extxyz_read(inp).unwrap();
 
         // dbg!(natoms);
         dbg!(info);
-        dbg!(arr);
+        // dbg!(arr);
         // dbg!(comment);
     }
 }
