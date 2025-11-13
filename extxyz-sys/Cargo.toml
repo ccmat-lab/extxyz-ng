@@ -18,4 +18,5 @@ libc = "0.2.177"
 [build-dependencies]
 cc = { version = "1.0", features = ["parallel"] }
 bindgen = "0.72.1"
+pcre2 = "0.2.11"
 

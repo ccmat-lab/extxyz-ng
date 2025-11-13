@@ -382,6 +382,12 @@ const _: () = {
 };
 pub type DictEntry = dict_entry_struct;
 unsafe extern "C" {
+    pub fn print_dict(dict: *mut DictEntry);
+}
+unsafe extern "C" {
+    pub fn free_dict(dict: *mut DictEntry);
+}
+unsafe extern "C" {
     pub fn extxyz_read_ll(
         kv_grammar: *mut cleri_grammar_t,
         fp: *mut FILE,
